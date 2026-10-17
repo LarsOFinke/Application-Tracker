@@ -82,6 +82,9 @@ if [[ -z "${APPIMAGETOOL:-}" && ! -f "$tool" ]]; then
     mv "$tool.partial" "$tool"
 fi
 [[ -f "$tool" ]] || { echo "appimagetool not found: $tool" >&2; exit 1; }
+if [[ -z "${APPIMAGETOOL:-}" ]]; then
+    chmod +x "$tool"
+fi
 
 appdir="$PWD/build/ApplicationTracker.AppDir"
 rm -rf "$appdir"
