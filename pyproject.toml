@@ -7,11 +7,10 @@ name = "application-tracker"
 version = "0.1.0"
 description = "A small local application tracker"
 readme = "README.md"
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.11,<3.14"
 dependencies = [
   "SQLAlchemy>=2.0,<2.2",
-  "Kivy==2.3.1; python_version < '3.14'",
-  "Kivy==3.0.0.dev0; python_version >= '3.14'",
+  "Kivy==2.3.1",
 ]
 
 [project.optional-dependencies]

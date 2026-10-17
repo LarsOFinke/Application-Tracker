@@ -9,7 +9,7 @@ from application_tracker.models.Application import Application
 from application_tracker.services.ApplicationData import ApplicationData
 from application_tracker.services.ApplicationInput import ApplicationInput
 
-STATUSES = ("Interested", "Preparing", "Applied", "Interview", "Offer", "Closed")
+STATUSES = ("Interested", "Preparing", "Applied", "Interview", "Offer", "Closed", "Done")
 
 
 class ApplicationMapper:

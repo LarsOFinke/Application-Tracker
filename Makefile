@@ -10,11 +10,11 @@ dev:
 	bash scripts/dev.sh
 
 test:
-	$${PYTHON_BIN:-python3} -m pytest -q
+	$${PYTHON_BIN:-.venv/bin/python} -m pytest -q
 
 quality:
-	$${PYTHON_BIN:-python3} -m ruff check src tests
-	$${PYTHON_BIN:-python3} -m pytest -q
+	$${PYTHON_BIN:-.venv/bin/python} -m ruff check src tests
+	$${PYTHON_BIN:-.venv/bin/python} -m pytest -q
 
 compile:
 	bash scripts/build-linux.sh

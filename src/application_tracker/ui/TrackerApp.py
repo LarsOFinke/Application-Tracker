@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import os
 import webbrowser
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("KIVY_DESKTOP_PATH_ID", "ApplicationTracker")
 
 from kivy.app import App  # noqa: E402
+from kivy.clock import Clock  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
-from kivy.metrics import dp  # noqa: E402
+from kivy.metrics import Metrics, dp  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
 from kivy.uix.filechooser import FileChooserListView  # noqa: E402
 from kivy.uix.label import Label  # noqa: E402
@@ -29,6 +31,7 @@ from application_tracker.storage.database import (  # noqa: E402
     default_database_path,
     make_session_factory,
 )
+from application_tracker.ui.scale_settings import SCALES, load_scale, save_scale  # noqa: E402
 from application_tracker.ui.widgets import button as _button  # noqa: E402
 from application_tracker.ui.widgets import label as _label  # noqa: E402
 
@@ -43,20 +46,41 @@ class TrackerApp(App):
         self.selected: ApplicationData | None = None
         self.files: list[str] = []
         self.baseline: tuple | None = None
+        self.show_done = False
+        self.scale_path = self.database_path.with_name("ui.ini")
+        self.ui_scale = load_scale(self.scale_path)
+        self.base_density = Metrics.density
 
     def build(self):
+        Metrics.density = self.base_density * self.ui_scale
         Window.minimum_width = 860
         Window.minimum_height = 620
         Window.size = (1120, 780)
         Window.clearcolor = (0.10, 0.13, 0.18, 1)
+        root = self.build_shell()
+        self.refresh_list()
+        self.clear_form()
+        Window.bind(on_drop_file=self.on_drop_file)
+        return root
+
+    def build_shell(self):
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
-        header = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(90), spacing=dp(4))
         title = Label(text="Application Tracker", font_size="22sp", bold=True, halign="left")
         title.bind(size=lambda widget, *_: setattr(widget, "text_size", widget.size))
         header.add_widget(title)
-        header.add_widget(_button("History", self.show_history, width=100))
-        header.add_widget(_button("Backup", self.backup, width=100))
-        header.add_widget(_button("New", self.new, width=90))
+        controls = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        controls.add_widget(_button("History", self.show_history))
+        controls.add_widget(_button("Backup", self.backup))
+        controls.add_widget(_button("New", self.new))
+        scale = Spinner(
+            text=f"Scale {self.ui_scale:.0%}",
+            values=[f"Scale {value:.0%}" for value in SCALES],
+        )
+        scale.bind(text=self.change_scale)
+        controls.add_widget(scale)
+        controls.add_widget(_button("Exit", lambda: self.guard_changes(self.stop)))
+        header.add_widget(controls)
         root.add_widget(header)
 
         body = BoxLayout(spacing=dp(14))
@@ -69,14 +93,18 @@ class TrackerApp(App):
         )
         self.search.bind(text=lambda *_: self.refresh_list())
         left.add_widget(self.search)
+        self.done_filter = _button("Show done", self.toggle_done)
+        self.done_filter.size_hint_y = None
+        self.done_filter.height = dp(42)
+        left.add_widget(self.done_filter)
         self.list_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
         self.list_box.bind(minimum_height=self.list_box.setter("height"))
-        list_scroll = ScrollView()
-        list_scroll.add_widget(self.list_box)
-        left.add_widget(list_scroll)
+        self.list_scroll = ScrollView()
+        self.list_scroll.add_widget(self.list_box)
+        left.add_widget(self.list_scroll)
         body.add_widget(left)
 
-        right_scroll = ScrollView(size_hint_x=0.64)
+        self.right_scroll = ScrollView(size_hint_x=0.64)
         self.form = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
@@ -115,15 +143,73 @@ class TrackerApp(App):
         self.submit_button = _button("Save new", self.submit)
         actions.add_widget(self.submit_button)
         actions.add_widget(_button("Open link", self.open_link))
+        self.done_button = _button("Mark done", self.mark_done)
+        actions.add_widget(self.done_button)
         actions.add_widget(_button("Delete", self.confirm_delete))
         self.form.add_widget(actions)
-        right_scroll.add_widget(self.form)
-        body.add_widget(right_scroll)
+        self.right_scroll.add_widget(self.form)
+        body.add_widget(self.right_scroll)
         root.add_widget(body)
-        self.refresh_list()
-        self.clear_form()
-        Window.bind(on_drop_file=self.on_drop_file)
         return root
+
+    def change_scale(self, _spinner: Spinner, label: str) -> None:
+        value = float(label.removeprefix("Scale ").removesuffix("%")) / 100
+        if value == self.ui_scale:
+            return
+        try:
+            save_scale(self.scale_path, value)
+        except (OSError, ValueError) as exc:
+            self.show_error(exc)
+            return
+        values = self.current_values()
+        selected, baseline = self.selected, self.baseline
+        search = self.search.text
+        timestamps = self.timestamps.text
+        list_y, right_y = self.list_scroll.scroll_y, self.right_scroll.scroll_y
+        self.ui_scale = value
+        Metrics.density = self.base_density * value
+        replacement = self.build_shell()
+        self.root.clear_widgets()
+        self.root.padding = replacement.padding
+        self.root.spacing = replacement.spacing
+        for child in reversed(replacement.children[:]):
+            replacement.remove_widget(child)
+            self.root.add_widget(child)
+        self.done_filter.text = "Hide done" if self.show_done else "Show done"
+        self.search.text = search
+        (
+            self.company.text,
+            self.role.text,
+            self.status.text,
+            self.url.text,
+            self.summary.text,
+            self.hints.text,
+            self.location.text,
+            self.contact_name.text,
+            self.contact_email.text,
+            self.contact_phone.text,
+            files,
+        ) = values
+        self.files = list(files)
+        self.refresh_files()
+        self.selected, self.baseline = selected, baseline
+        self.heading.text = f"Application #{selected.id}" if selected else "New application"
+        self.submit_button.text = "Update" if selected else "Save new"
+        self.done_button.disabled = selected is None or selected.status == "Done"
+        self.timestamps.text = timestamps
+        self.refresh_list()
+        Clock.schedule_once(
+            lambda _dt: self.restore_scroll(list_y, right_y), 0
+        )
+
+    def restore_scroll(self, list_y: float, right_y: float) -> None:
+        self.list_scroll.scroll_y = list_y
+        self.right_scroll.scroll_y = right_y
+
+    def toggle_done(self) -> None:
+        self.show_done = not self.show_done
+        self.done_filter.text = "Hide done" if self.show_done else "Show done"
+        self.refresh_list()
 
     def field(
         self, title: str, hint: str, *, multiline: bool = False, height: int = 42
@@ -175,6 +261,7 @@ class TrackerApp(App):
         self.selected = None
         self.heading.text = "New application"
         self.submit_button.text = "Save new"
+        self.done_button.disabled = True
         for field in (
             self.company,
             self.role,
@@ -205,6 +292,7 @@ class TrackerApp(App):
         self.selected = record
         self.heading.text = f"Application #{record.id}"
         self.submit_button.text = "Update"
+        self.done_button.disabled = record.status == "Done"
         self.company.text, self.role.text, self.status.text = (
             record.company,
             record.role,
@@ -227,8 +315,10 @@ class TrackerApp(App):
         except Exception as exc:
             self.show_error(exc)
             return
+        if not self.show_done:
+            records = [record for record in records if record.status != "Done"]
         if not records:
-            self.list_box.add_widget(_label("No applications yet", height=46))
+            self.list_box.add_widget(_label("No applications to show", height=46))
         for record in records:
             label = f"{record.company}  ·  {record.role}\n{record.status}"
             button = _button(label, lambda record_id=record.id: self.select(record_id))
@@ -306,8 +396,20 @@ class TrackerApp(App):
         self.selected = record
         self.heading.text = f"Application #{record.id}"
         self.submit_button.text = "Update"
+        self.done_button.disabled = record.status == "Done"
         self.show_timestamps(record)
         self.baseline = self.current_values()
+        self.refresh_list()
+
+    def mark_done(self) -> None:
+        if self.selected is None:
+            return
+        try:
+            self.service.update(self.selected.id, replace(self.form_input(), status="Done"))
+        except Exception as exc:
+            self.show_error(exc)
+            return
+        self.clear_form()
         self.refresh_list()
 
     def show_timestamps(self, record: ApplicationData) -> None:

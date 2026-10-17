@@ -141,6 +141,15 @@ def test_file_removal_is_logged_without_deleting_file(tmp_path):
     assert attachment.read_bytes() == b"keep"
 
 
+def test_mark_done_keeps_record_and_audits_status(tmp_path):
+    service = ApplicationService(make_session_factory(tmp_path / "tracker.sqlite3"))
+    created = service.create(form())
+    done = service.update(created.id, form(status="Done"))
+    assert done.status == "Done"
+    assert service.get(created.id).status == "Done"
+    assert service.history(created.id)[0].detail == "Status: Interested → Done"
+
+
 def test_backup_restores_data_and_future_schema_is_rejected(tmp_path):
     database = tmp_path / "tracker.sqlite3"
     service = ApplicationService(make_session_factory(database))
