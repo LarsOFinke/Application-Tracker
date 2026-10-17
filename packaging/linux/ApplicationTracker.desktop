@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Application Tracker
+Exec=ApplicationTracker
+Icon=ApplicationTracker
+Categories=Office;
+Terminal=false
