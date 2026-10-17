@@ -10,6 +10,7 @@ class ApplicationInput:
     summary: str
     hints: str
     files: tuple[str, ...] = ()
+    field_of_work: str = ""
     contact_name: str = ""
     contact_email: str = ""
     contact_phone: str = ""

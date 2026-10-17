@@ -17,6 +17,7 @@ class Application(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company: Mapped[str]
     role: Mapped[str]
+    field_of_work: Mapped[str] = mapped_column(default="")
     status: Mapped[str]
     url: Mapped[str] = mapped_column(default="")
     summary: Mapped[str] = mapped_column(default="")

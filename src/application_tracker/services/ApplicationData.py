@@ -7,6 +7,7 @@ class ApplicationData:
     id: int
     company: str
     role: str
+    field_of_work: str
     status: str
     url: str
     summary: str

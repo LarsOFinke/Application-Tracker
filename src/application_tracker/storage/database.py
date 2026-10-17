@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from application_tracker.models import Base
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def default_database_path() -> Path:
@@ -47,19 +47,26 @@ def make_session_factory(path: Path) -> sessionmaker:
                     )
                 Base.metadata.create_all(connection)
                 connection.execute(text(f"PRAGMA user_version={SCHEMA_VERSION}"))
-        if version == 1:
+        if version in (1, 2):
             destination = (
                 path.parent
                 / "backups"
-                / f"before-schema-2-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
+                / f"before-schema-{version + 1}-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
             )
             backup_database(path, destination)
             with engine.begin() as connection:
                 connection.exec_driver_sql("BEGIN IMMEDIATE")
-                for column in ("contact_name", "contact_email", "contact_phone", "location"):
-                    statement = f"ALTER TABLE application ADD COLUMN {column} VARCHAR NOT NULL "
-                    connection.execute(text(statement + "DEFAULT ''"))
-                Base.metadata.tables["audit_event"].create(connection)
+                if version == 1:
+                    for column in ("contact_name", "contact_email", "contact_phone", "location"):
+                        statement = f"ALTER TABLE application ADD COLUMN {column} VARCHAR NOT NULL "
+                        connection.execute(text(statement + "DEFAULT ''"))
+                    Base.metadata.tables["audit_event"].create(connection)
+                connection.execute(
+                    text(
+                        "ALTER TABLE application ADD COLUMN field_of_work "
+                        "VARCHAR NOT NULL DEFAULT ''"
+                    )
+                )
                 connection.execute(text(f"PRAGMA user_version={SCHEMA_VERSION}"))
     except Exception:
         engine.dispose()

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import webbrowser
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("KIVY_DESKTOP_PATH_ID", "ApplicationTracker")
+os.environ.setdefault("KIVY_CLIPBOARD", "sdl2")
 
 from kivy.app import App  # noqa: E402
 from kivy.clock import Clock  # noqa: E402
 from kivy.core.window import Window  # noqa: E402
+from kivy.logger import Logger  # noqa: E402
 from kivy.metrics import Metrics, dp  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
 from kivy.uix.filechooser import FileChooserListView  # noqa: E402
@@ -20,6 +22,7 @@ from kivy.uix.label import Label  # noqa: E402
 from kivy.uix.popup import Popup  # noqa: E402
 from kivy.uix.scrollview import ScrollView  # noqa: E402
 from kivy.uix.spinner import Spinner  # noqa: E402
+from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem  # noqa: E402
 from kivy.uix.textinput import TextInput  # noqa: E402
 
 from application_tracker.services.ApplicationData import ApplicationData  # noqa: E402
@@ -36,6 +39,12 @@ from application_tracker.ui.widgets import button as _button  # noqa: E402
 from application_tracker.ui.widgets import label as _label  # noqa: E402
 
 
+def _hide_optional_cutbuffer_warning(record: logging.LogRecord) -> bool:
+    return not record.getMessage().startswith(
+        "Cutbuffer: Unable to find any valuable Cutbuffer provider."
+    )
+
+
 class TrackerApp(App):
     title = "Application Tracker"
 
@@ -45,6 +54,7 @@ class TrackerApp(App):
         self.service = ApplicationService(make_session_factory(self.database_path))
         self.selected: ApplicationData | None = None
         self.files: list[str] = []
+        self.links: list[str] = []
         self.baseline: tuple | None = None
         self.show_done = False
         self.scale_path = self.database_path.with_name("ui.ini")
@@ -57,7 +67,13 @@ class TrackerApp(App):
         Window.minimum_height = 620
         Window.size = (1120, 780)
         Window.clearcolor = (0.10, 0.13, 0.18, 1)
-        root = self.build_shell()
+        # Kivy probes optional X11 primary-selection tools when TextInput is first built.
+        # Normal copy/paste uses SDL2; the missing cutbuffer needs no user action.
+        Logger.addFilter(_hide_optional_cutbuffer_warning)
+        try:
+            root = self.build_shell()
+        finally:
+            Logger.removeFilter(_hide_optional_cutbuffer_warning)
         self.refresh_list()
         self.clear_form()
         Window.bind(on_drop_file=self.on_drop_file)
@@ -65,14 +81,13 @@ class TrackerApp(App):
 
     def build_shell(self):
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
-        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(90), spacing=dp(4))
+        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(76), spacing=dp(4))
         title = Label(text="Application Tracker", font_size="22sp", bold=True, halign="left")
         title.bind(size=lambda widget, *_: setattr(widget, "text_size", widget.size))
         header.add_widget(title)
         controls = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
         controls.add_widget(_button("History", self.show_history))
         controls.add_widget(_button("Backup", self.backup))
-        controls.add_widget(_button("New", self.new))
         scale = Spinner(
             text=f"Scale {self.ui_scale:.0%}",
             values=[f"Scale {value:.0%}" for value in SCALES],
@@ -84,9 +99,10 @@ class TrackerApp(App):
         root.add_widget(header)
 
         body = BoxLayout(spacing=dp(14))
-        left = BoxLayout(orientation="vertical", size_hint_x=0.36, spacing=dp(8))
+        left = BoxLayout(orientation="vertical", size_hint_x=0.34, spacing=dp(8))
+        left.add_widget(_button("New application", self.new))
         self.search = TextInput(
-            hint_text="Search company, role or status",
+            hint_text="Search applications",
             multiline=False,
             size_hint_y=None,
             height=dp(42),
@@ -104,53 +120,131 @@ class TrackerApp(App):
         left.add_widget(self.list_scroll)
         body.add_widget(left)
 
-        self.right_scroll = ScrollView(size_hint_x=0.64)
-        self.form = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            spacing=dp(6),
-            padding=[dp(8), 0, dp(8), dp(10)],
-        )
-        self.form.bind(minimum_height=self.form.setter("height"))
+        editor = BoxLayout(orientation="vertical", size_hint_x=0.66, spacing=dp(7))
         self.heading = _label("New application", height=38)
-        self.form.add_widget(self.heading)
-        self.company = self.field("Company", "Company name")
-        self.role = self.field("Role", "Position or opportunity")
-        self.form.add_widget(_label("Status"))
-        self.status = Spinner(text=STATUSES[0], values=STATUSES, size_hint_y=None, height=dp(42))
-        self.form.add_widget(self.status)
-        self.location = self.field("Location (optional)", "City or remote")
-        self.contact_name = self.field("Contact name (optional)", "Recruiter or hiring manager")
-        self.contact_email = self.field("Contact email (optional)", "name@example.org")
-        self.contact_phone = self.field("Contact phone (optional)", "+49 …")
-        self.url = self.field("Links (one per line)", "https://…", multiline=True, height=84)
-        self.summary = self.field(
-            "Summary", "What is this opportunity?", multiline=True, height=108
-        )
-        self.hints = self.field(
-            "Hints / next steps", "Contacts, deadlines, questions…", multiline=True, height=108
-        )
-        file_heading = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
-        file_heading.add_widget(_label("Files (add or drop onto window)"))
-        file_heading.add_widget(_button("Add file", self.choose_file, width=100))
-        self.form.add_widget(file_heading)
-        self.files_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4))
-        self.files_box.bind(minimum_height=self.files_box.setter("height"))
-        self.form.add_widget(self.files_box)
-        self.timestamps = _label("", height=30)
-        self.form.add_widget(self.timestamps)
+        editor.add_widget(self.heading)
+        self.timestamps = _label("", height=26)
+        editor.add_widget(self.timestamps)
+
+        self.tabs = TabbedPanel(do_default_tab=False, tab_height=dp(42), tab_width=dp(104))
+        self.tab_scrolls = {}
+        self.overview_tab, overview = self.tab_content("Overview")
+        self.info_tab, info = self.tab_content("Info")
+        self.files_tab, files = self.tab_content("Files")
+        self.build_overview(overview)
+        self.build_info(info)
+        self.build_files(files)
+        self.configure_field_navigation()
+        self.tabs.switch_to(self.overview_tab)
+        editor.add_widget(self.tabs)
+
         actions = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-        self.submit_button = _button("Save new", self.submit)
-        actions.add_widget(self.submit_button)
-        actions.add_widget(_button("Open link", self.open_link))
-        self.done_button = _button("Mark done", self.mark_done)
-        actions.add_widget(self.done_button)
-        actions.add_widget(_button("Delete", self.confirm_delete))
-        self.form.add_widget(actions)
-        self.right_scroll.add_widget(self.form)
-        body.add_widget(self.right_scroll)
+        self.create_button = _button("Create", self.create_application)
+        actions.add_widget(self.create_button)
+        self.update_button = _button("Update", self.update_application)
+        actions.add_widget(self.update_button)
+        editor.add_widget(actions)
+        body.add_widget(editor)
         root.add_widget(body)
         return root
+
+    def tab_content(self, title: str) -> tuple[TabbedPanelItem, BoxLayout]:
+        tab = TabbedPanelItem(text=title)
+        scroll = ScrollView()
+        content = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(10), padding=dp(10)
+        )
+        content.bind(minimum_height=content.setter("height"))
+        scroll.add_widget(content)
+        tab.add_widget(scroll)
+        self.tabs.add_widget(tab)
+        self.tab_scrolls[title] = scroll
+        return tab, content
+
+    def build_overview(self, content: BoxLayout) -> None:
+        content.add_widget(_label("The opportunity", height=30))
+        row = self.field_row(content)
+        self.company = self.field(row, "Company", "Company name")
+        self.role = self.field(row, "Role", "Position")
+        row = self.field_row(content)
+        self.field_of_work = self.field(row, "Field of work (optional)", "e.g. Engineering")
+        self.location = self.field(row, "Location (optional)", "City or remote")
+        status_group = BoxLayout(
+            orientation="vertical", size_hint_y=None, height=dp(72), spacing=dp(4)
+        )
+        status_group.add_widget(_label("Status", height=24))
+        self.status = Spinner(text=STATUSES[0], values=STATUSES, size_hint_y=None, height=dp(42))
+        status_group.add_widget(self.status)
+        content.add_widget(status_group)
+
+    def build_info(self, content: BoxLayout) -> None:
+        content.add_widget(_label("Contact", height=30))
+        row = self.field_row(content)
+        self.contact_name = self.field(row, "Name (optional)", "Recruiter or manager")
+        self.contact_email = self.field(row, "Email (optional)", "name@example.org")
+        self.contact_phone = self.field(content, "Phone (optional)", "+49 …")
+        content.add_widget(_label("Notes and links", height=30))
+        self.summary = self.field(
+            content, "Summary", "What is this opportunity?", multiline=True, height=108
+        )
+        self.hints = self.field(
+            content,
+            "Hints / next steps",
+            "Deadlines, questions, follow-up…",
+            multiline=True,
+            height=108,
+        )
+        row = self.field_row(content)
+        self.link_input = self.field(row, "Add a link", "https://…")
+        self.link_input.bind(on_text_validate=lambda *_: self.add_link())
+        row.add_widget(_button("Add link", self.add_link, width=100))
+        content.add_widget(_label("Links", height=26))
+        self.links_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
+        self.links_box.bind(minimum_height=self.links_box.setter("height"))
+        content.add_widget(self.links_box)
+
+    def build_files(self, content: BoxLayout) -> None:
+        content.add_widget(_label("Linked files", height=30))
+        content.add_widget(
+            _label(
+                "Files stay in their original location. Add or drop them onto the window.",
+                height=50,
+            )
+        )
+        content.add_widget(_button("Add file", self.choose_file))
+        self.files_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
+        self.files_box.bind(minimum_height=self.files_box.setter("height"))
+        content.add_widget(self.files_box)
+
+    def field_row(self, content: BoxLayout) -> BoxLayout:
+        row = BoxLayout(size_hint_y=None, height=dp(72), spacing=dp(8))
+        content.add_widget(row)
+        return row
+
+    def configure_field_navigation(self) -> None:
+        overview = (self.company, self.role, self.field_of_work, self.location)
+        information = (
+            self.contact_name,
+            self.contact_email,
+            self.contact_phone,
+            self.summary,
+            self.hints,
+            self.link_input,
+        )
+        fields = (self.search, *overview, *information)
+        for current, next_field in zip(fields, (*fields[1:], fields[0]), strict=True):
+            current.write_tab = False
+            current.focus_next = next_field
+            next_field.focus_previous = current
+        for tab, tab_fields in ((self.overview_tab, overview), (self.info_tab, information)):
+            for field in tab_fields:
+                field.bind(
+                    focus=lambda _field, focused, target=tab: self.focus_tab(target, focused)
+                )
+
+    def focus_tab(self, tab: TabbedPanelItem, focused: bool) -> None:
+        if focused and self.tabs.current_tab is not tab:
+            self.tabs.switch_to(tab)
 
     def change_scale(self, _spinner: Spinner, label: str) -> None:
         value = float(label.removeprefix("Scale ").removesuffix("%")) / 100
@@ -165,7 +259,9 @@ class TrackerApp(App):
         selected, baseline = self.selected, self.baseline
         search = self.search.text
         timestamps = self.timestamps.text
-        list_y, right_y = self.list_scroll.scroll_y, self.right_scroll.scroll_y
+        list_y = self.list_scroll.scroll_y
+        tab_name = self.tabs.current_tab.text
+        tab_y = {name: scroll.scroll_y for name, scroll in self.tab_scrolls.items()}
         self.ui_scale = value
         Metrics.density = self.base_density * value
         replacement = self.build_shell()
@@ -180,8 +276,10 @@ class TrackerApp(App):
         (
             self.company.text,
             self.role.text,
+            self.field_of_work.text,
             self.status.text,
-            self.url.text,
+            links,
+            self.link_input.text,
             self.summary.text,
             self.hints.text,
             self.location.text,
@@ -190,21 +288,26 @@ class TrackerApp(App):
             self.contact_phone.text,
             files,
         ) = values
+        self.links = list(links)
+        self.refresh_links()
         self.files = list(files)
         self.refresh_files()
         self.selected, self.baseline = selected, baseline
         self.heading.text = f"Application #{selected.id}" if selected else "New application"
-        self.submit_button.text = "Update" if selected else "Save new"
-        self.done_button.disabled = selected is None or selected.status == "Done"
+        self.update_actions()
         self.timestamps.text = timestamps
         self.refresh_list()
-        Clock.schedule_once(
-            lambda _dt: self.restore_scroll(list_y, right_y), 0
-        )
+        Clock.schedule_once(lambda _dt: self.restore_scroll(list_y, tab_y, tab_name), 0.05)
 
-    def restore_scroll(self, list_y: float, right_y: float) -> None:
+    def restore_scroll(self, list_y: float, tab_y: dict[str, float], tab_name: str) -> None:
+        self.tabs.switch_to(
+            {"Overview": self.overview_tab, "Info": self.info_tab, "Files": self.files_tab}[
+                tab_name
+            ]
+        )
         self.list_scroll.scroll_y = list_y
-        self.right_scroll.scroll_y = right_y
+        for name, value in tab_y.items():
+            self.tab_scrolls[name].scroll_y = value
 
     def toggle_done(self) -> None:
         self.show_done = not self.show_done
@@ -212,19 +315,31 @@ class TrackerApp(App):
         self.refresh_list()
 
     def field(
-        self, title: str, hint: str, *, multiline: bool = False, height: int = 42
+        self,
+        parent: BoxLayout,
+        title: str,
+        hint: str,
+        *,
+        multiline: bool = False,
+        height: int = 42,
     ) -> TextInput:
-        self.form.add_widget(_label(title))
+        group = BoxLayout(
+            orientation="vertical", size_hint_y=None, height=dp(height + 30), spacing=dp(4)
+        )
+        group.add_widget(_label(title, height=24))
         field = TextInput(hint_text=hint, multiline=multiline, size_hint_y=None, height=dp(height))
-        self.form.add_widget(field)
+        group.add_widget(field)
+        parent.add_widget(group)
         return field
 
     def current_values(self) -> tuple:
         return (
             self.company.text,
             self.role.text,
+            self.field_of_work.text,
             self.status.text,
-            self.url.text,
+            tuple(self.links),
+            self.link_input.text,
             self.summary.text,
             self.hints.text,
             self.location.text,
@@ -260,12 +375,12 @@ class TrackerApp(App):
     def clear_form(self) -> None:
         self.selected = None
         self.heading.text = "New application"
-        self.submit_button.text = "Save new"
-        self.done_button.disabled = True
+        self.update_actions()
         for field in (
             self.company,
             self.role,
-            self.url,
+            self.field_of_work,
+            self.link_input,
             self.summary,
             self.hints,
             self.location,
@@ -276,8 +391,11 @@ class TrackerApp(App):
             field.text = ""
         self.status.text = STATUSES[0]
         self.timestamps.text = ""
+        self.links = []
+        self.refresh_links()
         self.files = []
         self.refresh_files()
+        self.tabs.switch_to(self.overview_tab)
         self.baseline = self.current_values()
 
     def select(self, record_id: int) -> None:
@@ -291,14 +409,17 @@ class TrackerApp(App):
             return
         self.selected = record
         self.heading.text = f"Application #{record.id}"
-        self.submit_button.text = "Update"
-        self.done_button.disabled = record.status == "Done"
+        self.update_actions()
         self.company.text, self.role.text, self.status.text = (
             record.company,
             record.role,
             record.status,
         )
-        self.url.text, self.summary.text, self.hints.text = record.url, record.summary, record.hints
+        self.field_of_work.text = record.field_of_work
+        self.links = [item.strip() for item in record.url.splitlines() if item.strip()]
+        self.link_input.text = ""
+        self.refresh_links()
+        self.summary.text, self.hints.text = record.summary, record.hints
         self.location.text = record.location
         self.contact_name.text = record.contact_name
         self.contact_email.text = record.contact_email
@@ -306,6 +427,7 @@ class TrackerApp(App):
         self.show_timestamps(record)
         self.files = list(record.files)
         self.refresh_files()
+        self.tabs.switch_to(self.overview_tab)
         self.baseline = self.current_values()
 
     def refresh_list(self) -> None:
@@ -321,18 +443,79 @@ class TrackerApp(App):
             self.list_box.add_widget(_label("No applications to show", height=46))
         for record in records:
             label = f"{record.company}  ·  {record.role}\n{record.status}"
-            button = _button(label, lambda record_id=record.id: self.select(record_id))
-            button.height = dp(64)
-            button.halign = "left"
-            self.list_box.add_widget(button)
+            row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(5))
+            select_button = _button(label, lambda record_id=record.id: self.select(record_id))
+            select_button.height = dp(64)
+            select_button.halign = "left"
+            row.add_widget(select_button)
+            done_button = _button(
+                "✓", lambda record_id=record.id: self.mark_done(record_id), width=40
+            )
+            done_button.height = dp(64)
+            done_button.font_size = "22sp"
+            done_button.color = (0.47, 0.90, 0.60, 1)
+            done_button.disabled = record.status == "Done"
+            row.add_widget(done_button)
+            delete_button = _button(
+                "×", lambda record_id=record.id: self.confirm_delete(record_id), width=40
+            )
+            delete_button.height = dp(64)
+            delete_button.font_size = "24sp"
+            delete_button.color = (1, 0.55, 0.55, 1)
+            row.add_widget(delete_button)
+            self.list_box.add_widget(row)
 
     def refresh_files(self) -> None:
         self.files_box.clear_widgets()
+        if not self.files:
+            self.files_box.add_widget(_label("No files linked yet", height=42))
         for path in self.files:
             row = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(5))
             row.add_widget(_button(Path(path).name, lambda item=path: self.open_file(item)))
             row.add_widget(_button("×", lambda item=path: self.remove_file(item), width=42))
             self.files_box.add_widget(row)
+
+    def refresh_links(self) -> None:
+        self.links_box.clear_widgets()
+        if not self.links:
+            self.links_box.add_widget(_label("No links added yet", height=42))
+        for index, link in enumerate(self.links):
+            row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(5))
+            open_button = _button(link, lambda value=link: self.open_link(value))
+            open_button.halign = "left"
+            open_button.shorten = True
+            open_button.bind(
+                width=lambda button, width: setattr(button, "text_size", (width - dp(16), None))
+            )
+            row.add_widget(open_button)
+            row.add_widget(
+                _button("×", lambda position=index: self.remove_link(position), width=42)
+            )
+            self.links_box.add_widget(row)
+
+    def add_link(self) -> bool:
+        link = self.link_input.text.strip()
+        if not link:
+            return False
+        if any(character.isspace() for character in link) or not link.startswith(
+            ("https://", "http://")
+        ):
+            self.show_error(ValueError("Enter one http:// or https:// link without spaces"))
+            return False
+        if link in self.links:
+            self.show_error(ValueError("This link is already in the list"))
+            return False
+        if len(self.links) >= 10 or len("\n".join((*self.links, link))) > 2000:
+            self.show_error(ValueError("Use at most 10 links totaling 2000 characters"))
+            return False
+        self.links.append(link)
+        self.link_input.text = ""
+        self.refresh_links()
+        return True
+
+    def remove_link(self, index: int) -> None:
+        self.links.pop(index)
+        self.refresh_links()
 
     def choose_file(self) -> None:
         chooser = FileChooserListView(path=str(Path.home()), filters=[])
@@ -361,7 +544,8 @@ class TrackerApp(App):
         return True
 
     def on_drop_file(self, _window, filename: bytes, *_args) -> None:
-        self.add_file(Path(os.fsdecode(filename)))
+        if self.add_file(Path(os.fsdecode(filename))):
+            self.tabs.switch_to(self.files_tab)
 
     def remove_file(self, path: str) -> None:
         self.files.remove(path)
@@ -371,8 +555,9 @@ class TrackerApp(App):
         return ApplicationInput(
             company=self.company.text,
             role=self.role.text,
+            field_of_work=self.field_of_work.text,
             status=self.status.text,
-            url=self.url.text,
+            url="\n".join(self.links),
             summary=self.summary.text,
             hints=self.hints.text,
             files=tuple(self.files),
@@ -382,34 +567,49 @@ class TrackerApp(App):
             contact_phone=self.contact_phone.text,
         )
 
-    def submit(self) -> None:
+    def update_actions(self) -> None:
+        self.create_button.disabled = self.selected is not None
+        self.update_button.disabled = self.selected is None
+
+    def create_application(self) -> None:
+        if self.selected is None:
+            self.save_record(self.service.create)
+
+    def update_application(self) -> None:
+        if self.selected is not None:
+            record_id = self.selected.id
+            self.save_record(lambda data: self.service.update(record_id, data))
+
+    def save_record(self, operation) -> None:
+        if self.link_input.text.strip() and not self.add_link():
+            return
+        self.link_input.text = ""
         try:
-            data = self.form_input()
-            record = (
-                self.service.create(data)
-                if self.selected is None
-                else self.service.update(self.selected.id, data)
-            )
+            record = operation(self.form_input())
         except Exception as exc:
             self.show_error(exc)
             return
         self.selected = record
         self.heading.text = f"Application #{record.id}"
-        self.submit_button.text = "Update"
-        self.done_button.disabled = record.status == "Done"
+        self.update_actions()
         self.show_timestamps(record)
         self.baseline = self.current_values()
         self.refresh_list()
 
-    def mark_done(self) -> None:
-        if self.selected is None:
-            return
+    def mark_done(self, record_id: int) -> None:
+        if self.selected is not None and self.selected.id == record_id:
+            self.guard_changes(lambda: self.finish_mark_done(record_id))
+        else:
+            self.finish_mark_done(record_id)
+
+    def finish_mark_done(self, record_id: int) -> None:
         try:
-            self.service.update(self.selected.id, replace(self.form_input(), status="Done"))
+            self.service.mark_done(record_id)
         except Exception as exc:
             self.show_error(exc)
             return
-        self.clear_form()
+        if self.selected is not None and self.selected.id == record_id:
+            self.clear_form()
         self.refresh_list()
 
     def show_timestamps(self, record: ApplicationData) -> None:
@@ -444,12 +644,16 @@ class TrackerApp(App):
         layout.add_widget(_button("Close", popup.dismiss))
         popup.open()
 
-    def confirm_delete(self) -> None:
-        if self.selected is None:
+    def confirm_delete(self, record_id: int) -> None:
+        try:
+            record = self.service.get(record_id)
+        except Exception as exc:
+            self.show_error(exc)
             return
-        record_id = self.selected.id
         layout = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
-        layout.add_widget(Label(text="Delete this application? Linked files stay on disk."))
+        layout.add_widget(
+            Label(text=f"Delete {record.company} · {record.role}?\nLinked files stay on disk.")
+        )
         buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
         popup = Popup(
             title="Delete application",
@@ -460,39 +664,32 @@ class TrackerApp(App):
         buttons.add_widget(_button("Cancel", popup.dismiss))
 
         def delete():
-            try:
-                self.service.delete(record_id)
-                popup.dismiss()
-                self.clear_form()
+            popup.dismiss()
+
+            def apply_delete():
+                try:
+                    self.service.delete(record_id)
+                except Exception as exc:
+                    self.show_error(exc)
+                    return
+                if self.selected is not None and self.selected.id == record_id:
+                    self.clear_form()
                 self.refresh_list()
-            except Exception as exc:
-                popup.dismiss()
-                self.show_error(exc)
+
+            if self.selected is not None and self.selected.id == record_id:
+                self.guard_changes(apply_delete)
+            else:
+                apply_delete()
 
         buttons.add_widget(_button("Delete", delete))
         layout.add_widget(buttons)
         popup.open()
 
-    def open_link(self) -> None:
-        links = [item.strip() for item in self.url.text.splitlines() if item.strip()]
-        if not links:
-            return
-        if any(not item.startswith(("https://", "http://")) for item in links):
+    def open_link(self, link: str) -> None:
+        if not link.startswith(("https://", "http://")):
             self.show_error(ValueError("Links must begin with https:// or http://"))
             return
-        if len(links) == 1:
-            webbrowser.open(links[0])
-            return
-        layout = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(6))
-        popup = Popup(title="Open a link", content=layout, size_hint=(0.7, 0.7))
-        for link in links:
-
-            def open_selected(value=link):
-                webbrowser.open(value)
-                popup.dismiss()
-
-            layout.add_widget(_button(link, open_selected))
-        popup.open()
+        webbrowser.open(link)
 
     def open_file(self, path: str) -> None:
         if not Path(path).is_file():

@@ -29,8 +29,9 @@ def test_create_edit_reopen_and_delete_preserves_linked_file(tmp_path):
     attachment = tmp_path / "resume.pdf"
     attachment.write_bytes(b"private example")
     service = ApplicationService(make_session_factory(database))
-    created = service.create(form(files=(str(attachment),)))
+    created = service.create(form(files=(str(attachment),), field_of_work="Engineering"))
     assert created.files == (str(attachment),)
+    assert created.field_of_work == "Engineering"
     assert created.created_at == created.updated_at
     assert [event.action for event in service.history(created.id)] == ["file_added", "created"]
 
@@ -46,6 +47,7 @@ def test_create_edit_reopen_and_delete_preserves_linked_file(tmp_path):
             contact_email="ada@example.org",
             contact_phone="+49 30 123456",
             location="Berlin",
+            field_of_work="Software development",
         ),
     )
     assert updated.status == "Applied"
@@ -53,6 +55,8 @@ def test_create_edit_reopen_and_delete_preserves_linked_file(tmp_path):
     assert updated.updated_at >= created.updated_at
     assert len(updated.url.splitlines()) == 2
     assert reopened.get(created.id).location == "Berlin"
+    assert reopened.get(created.id).field_of_work == "Software development"
+    assert [item.id for item in reopened.list("software development")] == [created.id]
     assert any(
         event.action == "status_changed" and event.detail == "Status: Interested → Applied"
         for event in reopened.history(created.id)
@@ -70,6 +74,7 @@ def test_create_edit_reopen_and_delete_preserves_linked_file(tmp_path):
             contact_email="ada@example.org",
             contact_phone="+49 30 123456",
             location="Berlin",
+            field_of_work="Software development",
         ),
     )
     assert reopened.get(created.id).updated_at == updated.updated_at
@@ -99,6 +104,7 @@ def test_mapper_normalizes_input_and_rejects_bad_status(tmp_path):
         form(
             company="  Example GmbH  ",
             role="  Engineer ",
+            field_of_work="  Engineering ",
             contact_email="  ada@example.org  ",
             url=" https://example.org/job  \n\n https://example.org/team ",
             files=(str(path), str(path)),
@@ -106,6 +112,7 @@ def test_mapper_normalizes_input_and_rejects_bad_status(tmp_path):
     )
     assert mapped.company == "Example GmbH"
     assert mapped.role == "Engineer"
+    assert mapped.field_of_work == "Engineering"
     assert mapped.contact_email == "ada@example.org"
     assert mapped.url == "https://example.org/job\nhttps://example.org/team"
     assert mapped.files == (str(path),)
@@ -143,11 +150,15 @@ def test_file_removal_is_logged_without_deleting_file(tmp_path):
 
 def test_mark_done_keeps_record_and_audits_status(tmp_path):
     service = ApplicationService(make_session_factory(tmp_path / "tracker.sqlite3"))
-    created = service.create(form())
-    done = service.update(created.id, form(status="Done"))
+    created = service.create(form(hints="Follow up after interview"))
+    done = service.mark_done(created.id)
     assert done.status == "Done"
     assert service.get(created.id).status == "Done"
+    assert done.hints == "Follow up after interview"
     assert service.history(created.id)[0].detail == "Status: Interested → Done"
+    history_count = len(service.history(created.id))
+    assert service.mark_done(created.id).updated_at == done.updated_at
+    assert len(service.history(created.id)) == history_count
 
 
 def test_backup_restores_data_and_future_schema_is_rejected(tmp_path):
@@ -189,7 +200,12 @@ def test_version_one_database_migrates_and_keeps_data(tmp_path):
         """)
     service = ApplicationService(make_session_factory(database))
     old = service.get(1)
-    assert (old.company, old.files, old.contact_email) == ("Legacy Co", ("/tmp/old.pdf",), "")
+    assert (old.company, old.files, old.contact_email, old.field_of_work) == (
+        "Legacy Co",
+        ("/tmp/old.pdf",),
+        "",
+        "",
+    )
     assert service.history(1) == []
     snapshots = list((tmp_path / "backups").glob("before-schema-2-*.sqlite3"))
     assert len(snapshots) == 1
@@ -209,3 +225,23 @@ def test_version_one_database_migrates_and_keeps_data(tmp_path):
         ),
     )
     assert service.history(1)[0].detail == "Status: Interested → Applied"
+
+
+def test_version_two_database_adds_field_of_work_without_losing_data(tmp_path):
+    database = tmp_path / "version-two.sqlite3"
+    original = ApplicationService(make_session_factory(database))
+    created = original.create(form())
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE application DROP COLUMN field_of_work")
+        connection.execute("PRAGMA user_version=2")
+
+    upgraded = ApplicationService(make_session_factory(database))
+    assert upgraded.get(created.id).company == "Example GmbH"
+    assert upgraded.get(created.id).field_of_work == ""
+    assert upgraded.history(created.id)[0].action == "created"
+    assert len(list((tmp_path / "backups").glob("before-schema-3-*.sqlite3"))) == 1
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    changed = upgraded.update(created.id, form(field_of_work="Design"))
+    assert changed.field_of_work == "Design"
+    assert upgraded.history(created.id)[0].detail == "Field of work updated"

@@ -18,6 +18,7 @@ from application_tracker.services.AuditData import AuditData
 LABELS = {
     "company": "Company",
     "role": "Role",
+    "field_of_work": "Field of work",
     "status": "Status",
     "url": "Links",
     "summary": "Summary",
@@ -47,7 +48,13 @@ class ApplicationService:
                 if not needle
                 or needle
                 in " ".join(
-                    (record.company, record.role, record.status, record.contact_name)
+                    (
+                        record.company,
+                        record.role,
+                        record.field_of_work,
+                        record.status,
+                        record.contact_name,
+                    )
                 ).casefold()
             ]
 
@@ -122,6 +129,29 @@ class ApplicationService:
             if events:
                 record.updated_at = now
                 self._add_events(session, record.id, now, events)
+            session.flush()
+            return ApplicationMapper.to_data(record)
+
+    def mark_done(self, record_id: int) -> ApplicationData:
+        with self.sessions.begin() as session:
+            record = session.scalar(
+                select(Application)
+                .options(selectinload(Application.files))
+                .where(Application.id == record_id)
+            )
+            if record is None:
+                raise ValueError("Application no longer exists")
+            if record.status != "Done":
+                now = datetime.now()
+                old_status = record.status
+                record.status = "Done"
+                record.updated_at = now
+                self._add_events(
+                    session,
+                    record_id,
+                    now,
+                    [("status_changed", f"Status: {old_status} → Done")],
+                )
             session.flush()
             return ApplicationMapper.to_data(record)
 

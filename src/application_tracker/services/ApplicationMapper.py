@@ -16,6 +16,7 @@ class ApplicationMapper:
     @staticmethod
     def normalize(raw: ApplicationInput) -> ApplicationInput:
         company, role = raw.company.strip(), raw.role.strip()
+        field_of_work = raw.field_of_work.strip()
         contact_name = raw.contact_name.strip()
         contact_email = raw.contact_email.strip()
         contact_phone = raw.contact_phone.strip()
@@ -24,8 +25,10 @@ class ApplicationMapper:
             raise ValueError("Company and role are required")
         if raw.status not in STATUSES:
             raise ValueError("Choose a valid status")
-        if any(len(value) > 200 for value in (company, role, contact_name, location)):
-            raise ValueError("Company, role, contact name or location is too long")
+        if any(
+            len(value) > 200 for value in (company, role, field_of_work, contact_name, location)
+        ):
+            raise ValueError("Company, role, field of work, contact name or location is too long")
         if len(contact_email) > 254 or (
             contact_email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", contact_email)
         ):
@@ -46,6 +49,7 @@ class ApplicationMapper:
         return ApplicationInput(
             company=company,
             role=role,
+            field_of_work=field_of_work,
             status=raw.status,
             url=url,
             summary=raw.summary,
@@ -60,18 +64,19 @@ class ApplicationMapper:
     @staticmethod
     def to_data(record: Application) -> ApplicationData:
         return ApplicationData(
-            record.id,
-            record.company,
-            record.role,
-            record.status,
-            record.url,
-            record.summary,
-            record.hints,
-            record.contact_name,
-            record.contact_email,
-            record.contact_phone,
-            record.location,
-            tuple(item.path for item in record.files),
-            record.created_at,
-            record.updated_at,
+            id=record.id,
+            company=record.company,
+            role=record.role,
+            field_of_work=record.field_of_work,
+            status=record.status,
+            url=record.url,
+            summary=record.summary,
+            hints=record.hints,
+            contact_name=record.contact_name,
+            contact_email=record.contact_email,
+            contact_phone=record.contact_phone,
+            location=record.location,
+            files=tuple(item.path for item in record.files),
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
