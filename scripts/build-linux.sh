@@ -60,14 +60,17 @@ else
         "$python_bin" -m venv .build-venv
         echo "Created .build-venv with $($build_python -V)"
     fi
-    run_logged install "$build_python" -m pip install -e . 'pyinstaller==6.22.3'
 fi
-"$build_python" -c 'import PyInstaller, kivy, sqlalchemy' >/dev/null
+
+run_logged wheel env PYTHON_BIN="$build_python" bash scripts/build-wheel.sh
+wheel="$($build_python scripts/wheel_path.py)"
+run_logged install "$build_python" -m pip install --upgrade "$wheel" 'pyinstaller==6.22.3'
+"$build_python" -c 'import PyInstaller, kivy, sqlalchemy, application_tracker' >/dev/null
 
 mkdir -p build dist/linux
 run_logged pyinstaller "$build_python" -m PyInstaller --log-level=WARN \
     --noconfirm --onefile --windowed \
-    --name ApplicationTracker --paths "$PWD/src" \
+    --name ApplicationTracker \
     --collect-submodules sqlalchemy.dialects.sqlite \
     --distpath dist/linux --workpath build/pyinstaller --specpath build \
     scripts/frozen_entry.py
