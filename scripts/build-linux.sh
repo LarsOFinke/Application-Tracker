@@ -65,11 +65,12 @@ fi
 run_logged wheel env PYTHON_BIN="$build_python" bash scripts/build-wheel.sh
 wheel="$($build_python scripts/wheel_path.py)"
 run_logged install "$build_python" -m pip install --upgrade "$wheel" 'pyinstaller==6.22.3'
+run_logged reinstall-wheel "$build_python" -m pip install --force-reinstall --no-deps "$wheel"
 "$build_python" -c 'import PyInstaller, kivy, sqlalchemy, application_tracker' >/dev/null
 
 mkdir -p build dist/linux
 run_logged pyinstaller "$build_python" -m PyInstaller --log-level=WARN \
-    --noconfirm --onefile --windowed \
+    --clean --noconfirm --onefile --windowed \
     --name ApplicationTracker \
     --collect-submodules sqlalchemy.dialects.sqlite \
     --distpath dist/linux --workpath build/pyinstaller --specpath build \

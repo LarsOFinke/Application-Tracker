@@ -19,8 +19,6 @@ from kivy.metrics import Metrics, dp  # noqa: E402
 from kivy.uix.boxlayout import BoxLayout  # noqa: E402
 from kivy.uix.filechooser import FileChooserListView  # noqa: E402
 from kivy.uix.label import Label  # noqa: E402
-from kivy.uix.popup import Popup  # noqa: E402
-from kivy.uix.scrollview import ScrollView  # noqa: E402
 from kivy.uix.spinner import Spinner  # noqa: E402
 from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem  # noqa: E402
 from kivy.uix.textinput import TextInput  # noqa: E402
@@ -34,9 +32,15 @@ from application_tracker.storage.database import (  # noqa: E402
     default_database_path,
     make_session_factory,
 )
+from application_tracker.ui.palette import ACCENT, BG, MUTED, PANEL, PANEL_LIGHT, WHITE  # noqa: E402
 from application_tracker.ui.scale_settings import SCALES, load_scale, save_scale  # noqa: E402
 from application_tracker.ui.widgets import button as _button  # noqa: E402
+from application_tracker.ui.widgets import dialog as _dialog  # noqa: E402
 from application_tracker.ui.widgets import label as _label  # noqa: E402
+from application_tracker.ui.widgets import scroll_view as _scroll_view  # noqa: E402
+from application_tracker.ui.widgets import spinner as _spinner  # noqa: E402
+from application_tracker.ui.widgets import surface as _surface  # noqa: E402
+from application_tracker.ui.widgets import text_field as _text_field  # noqa: E402
 
 
 def _hide_optional_cutbuffer_warning(record: logging.LogRecord) -> bool:
@@ -66,7 +70,7 @@ class TrackerApp(App):
         Window.minimum_width = 860
         Window.minimum_height = 620
         Window.size = (1120, 780)
-        Window.clearcolor = (0.10, 0.13, 0.18, 1)
+        Window.clearcolor = BG
         # Kivy probes optional X11 primary-selection tools when TextInput is first built.
         # Normal copy/paste uses SDL2; the missing cutbuffer needs no user action.
         Logger.addFilter(_hide_optional_cutbuffer_warning)
@@ -81,52 +85,61 @@ class TrackerApp(App):
 
     def build_shell(self):
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
-        header = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(76), spacing=dp(4))
-        title = Label(text="Application Tracker", font_size="22sp", bold=True, halign="left")
-        title.bind(size=lambda widget, *_: setattr(widget, "text_size", widget.size))
-        header.add_widget(title)
-        controls = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        controls.add_widget(_button("History", self.show_history))
-        controls.add_widget(_button("Backup", self.backup))
-        scale = Spinner(
-            text=f"Scale {self.ui_scale:.0%}",
-            values=[f"Scale {value:.0%}" for value in SCALES],
+        header = _surface(
+            BoxLayout(size_hint_y=None, height=dp(76), padding=dp(14), spacing=dp(12))
         )
+        identity = BoxLayout(orientation="vertical", spacing=dp(2))
+        identity.add_widget(_label("Application Tracker", height=35, size=22, bold=True))
+        identity.add_widget(
+            _label("Your opportunities, in one place", height=18, size=12, color=MUTED)
+        )
+        header.add_widget(identity)
+        controls = BoxLayout(size_hint_x=None, width=dp(295), spacing=dp(7))
+        controls.add_widget(_button("History", self.show_history, width=64))
+        controls.add_widget(_button("Backup", self.backup, width=64))
+        scale = _spinner(f"Scale {self.ui_scale:.0%}", [f"Scale {value:.0%}" for value in SCALES])
+        scale.size_hint_x = None
+        scale.width = dp(92)
         scale.bind(text=self.change_scale)
         controls.add_widget(scale)
-        controls.add_widget(_button("Exit", lambda: self.guard_changes(self.stop)))
+        controls.add_widget(_button("Exit", lambda: self.guard_changes(self.stop), width=54))
         header.add_widget(controls)
         root.add_widget(header)
 
-        body = BoxLayout(spacing=dp(14))
-        left = BoxLayout(orientation="vertical", size_hint_x=0.34, spacing=dp(8))
-        left.add_widget(_button("New application", self.new))
-        self.search = TextInput(
-            hint_text="Search applications",
-            multiline=False,
-            size_hint_y=None,
-            height=dp(42),
+        body = BoxLayout(spacing=dp(12))
+        left = _surface(
+            BoxLayout(orientation="vertical", size_hint_x=0.36, padding=dp(12), spacing=dp(9))
         )
+        self.list_heading = _label("Applications", height=32, size=18, bold=True)
+        left.add_widget(self.list_heading)
+        left.add_widget(_button("+  New application", self.new, kind="primary"))
+        self.search = _text_field("Search company, role, status…")
         self.search.bind(text=lambda *_: self.refresh_list())
         left.add_widget(self.search)
         self.done_filter = _button("Show done", self.toggle_done)
-        self.done_filter.size_hint_y = None
-        self.done_filter.height = dp(42)
         left.add_widget(self.done_filter)
         self.list_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
         self.list_box.bind(minimum_height=self.list_box.setter("height"))
-        self.list_scroll = ScrollView()
+        self.list_scroll = _scroll_view()
         self.list_scroll.add_widget(self.list_box)
         left.add_widget(self.list_scroll)
         body.add_widget(left)
 
-        editor = BoxLayout(orientation="vertical", size_hint_x=0.66, spacing=dp(7))
-        self.heading = _label("New application", height=38)
+        editor = _surface(
+            BoxLayout(orientation="vertical", size_hint_x=0.64, padding=dp(12), spacing=dp(8))
+        )
+        self.heading = _label("New application", height=38, size=20, bold=True)
         editor.add_widget(self.heading)
-        self.timestamps = _label("", height=26)
+        self.timestamps = _label("", height=26, size=12, color=MUTED)
         editor.add_widget(self.timestamps)
 
-        self.tabs = TabbedPanel(do_default_tab=False, tab_height=dp(42), tab_width=dp(104))
+        self.tabs = TabbedPanel(
+            do_default_tab=False,
+            tab_height=dp(42),
+            tab_width=dp(104),
+            background_image="",
+            background_color=PANEL,
+        )
         self.tab_scrolls = {}
         self.overview_tab, overview = self.tab_content("Overview")
         self.info_tab, info = self.tab_content("Info")
@@ -139,9 +152,9 @@ class TrackerApp(App):
         editor.add_widget(self.tabs)
 
         actions = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-        self.create_button = _button("Create", self.create_application)
+        self.create_button = _button("Create application", self.create_application, kind="primary")
         actions.add_widget(self.create_button)
-        self.update_button = _button("Update", self.update_application)
+        self.update_button = _button("Update application", self.update_application, kind="primary")
         actions.add_widget(self.update_button)
         editor.add_widget(actions)
         body.add_widget(editor)
@@ -149,8 +162,21 @@ class TrackerApp(App):
         return root
 
     def tab_content(self, title: str) -> tuple[TabbedPanelItem, BoxLayout]:
-        tab = TabbedPanelItem(text=title)
-        scroll = ScrollView()
+        tab = TabbedPanelItem(
+            text=title,
+            background_normal="",
+            background_down="",
+            background_color=PANEL_LIGHT,
+            color=WHITE,
+            font_size=dp(14),
+        )
+        tab.bind(
+            state=lambda item, state: setattr(
+                item, "background_color", ACCENT if state == "down" else PANEL_LIGHT
+            )
+        )
+        tab.bind(state=lambda item, state: setattr(item, "color", BG if state == "down" else WHITE))
+        scroll = _surface(_scroll_view())
         content = BoxLayout(
             orientation="vertical", size_hint_y=None, spacing=dp(10), padding=dp(10)
         )
@@ -162,7 +188,7 @@ class TrackerApp(App):
         return tab, content
 
     def build_overview(self, content: BoxLayout) -> None:
-        content.add_widget(_label("The opportunity", height=30))
+        content.add_widget(_label("The opportunity", height=30, size=16, bold=True))
         row = self.field_row(content)
         self.company = self.field(row, "Company", "Company name")
         self.role = self.field(row, "Role", "Position")
@@ -172,18 +198,18 @@ class TrackerApp(App):
         status_group = BoxLayout(
             orientation="vertical", size_hint_y=None, height=dp(72), spacing=dp(4)
         )
-        status_group.add_widget(_label("Status", height=24))
-        self.status = Spinner(text=STATUSES[0], values=STATUSES, size_hint_y=None, height=dp(42))
+        status_group.add_widget(_label("Status", height=24, color=MUTED))
+        self.status = _spinner(STATUSES[0], STATUSES)
         status_group.add_widget(self.status)
         content.add_widget(status_group)
 
     def build_info(self, content: BoxLayout) -> None:
-        content.add_widget(_label("Contact", height=30))
+        content.add_widget(_label("Contact", height=30, size=16, bold=True))
         row = self.field_row(content)
         self.contact_name = self.field(row, "Name (optional)", "Recruiter or manager")
         self.contact_email = self.field(row, "Email (optional)", "name@example.org")
         self.contact_phone = self.field(content, "Phone (optional)", "+49 …")
-        content.add_widget(_label("Notes and links", height=30))
+        content.add_widget(_label("Notes and links", height=30, size=16, bold=True))
         self.summary = self.field(
             content, "Summary", "What is this opportunity?", multiline=True, height=108
         )
@@ -198,26 +224,34 @@ class TrackerApp(App):
         self.link_input = self.field(row, "Add a link", "https://…")
         self.link_input.bind(on_text_validate=lambda *_: self.add_link())
         row.add_widget(_button("Add link", self.add_link, width=100))
-        content.add_widget(_label("Links", height=26))
+        content.add_widget(_label("Links", height=26, color=MUTED))
         self.links_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
         self.links_box.bind(minimum_height=self.links_box.setter("height"))
         content.add_widget(self.links_box)
 
     def build_files(self, content: BoxLayout) -> None:
-        content.add_widget(_label("Linked files", height=30))
+        content.add_widget(_label("Linked files", height=30, size=16, bold=True))
         content.add_widget(
             _label(
                 "Files stay in their original location. Add or drop them onto the window.",
                 height=50,
+                color=MUTED,
             )
         )
-        content.add_widget(_button("Add file", self.choose_file))
+        content.add_widget(_button("Add file", self.choose_file, kind="primary"))
         self.files_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(5))
         self.files_box.bind(minimum_height=self.files_box.setter("height"))
         content.add_widget(self.files_box)
 
     def field_row(self, content: BoxLayout) -> BoxLayout:
         row = BoxLayout(size_hint_y=None, height=dp(72), spacing=dp(8))
+
+        def adapt_width(_row, width):
+            compact = width < dp(520)
+            row.orientation = "vertical" if compact else "horizontal"
+            row.height = dp(152 if compact else 72)
+
+        row.bind(width=adapt_width)
         content.add_widget(row)
         return row
 
@@ -326,8 +360,8 @@ class TrackerApp(App):
         group = BoxLayout(
             orientation="vertical", size_hint_y=None, height=dp(height + 30), spacing=dp(4)
         )
-        group.add_widget(_label(title, height=24))
-        field = TextInput(hint_text=hint, multiline=multiline, size_hint_y=None, height=dp(height))
+        group.add_widget(_label(title, height=24, color=MUTED))
+        field = _text_field(hint, multiline=multiline, height=height)
         group.add_widget(field)
         parent.add_widget(group)
         return field
@@ -356,7 +390,7 @@ class TrackerApp(App):
         layout = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
         layout.add_widget(Label(text="Discard unsaved changes?"))
         buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        popup = Popup(
+        popup = _dialog(
             title="Unsaved changes", content=layout, size_hint=(None, None), size=(dp(380), dp(180))
         )
         buttons.add_widget(_button("Keep editing", popup.dismiss))
@@ -365,7 +399,7 @@ class TrackerApp(App):
             popup.dismiss()
             action()
 
-        buttons.add_widget(_button("Discard", discard))
+        buttons.add_widget(_button("Discard", discard, kind="danger"))
         layout.add_widget(buttons)
         popup.open()
 
@@ -397,6 +431,7 @@ class TrackerApp(App):
         self.refresh_files()
         self.tabs.switch_to(self.overview_tab)
         self.baseline = self.current_values()
+        self.refresh_list()
 
     def select(self, record_id: int) -> None:
         self.guard_changes(lambda: self.load(record_id))
@@ -429,6 +464,7 @@ class TrackerApp(App):
         self.refresh_files()
         self.tabs.switch_to(self.overview_tab)
         self.baseline = self.current_values()
+        self.refresh_list()
 
     def refresh_list(self) -> None:
         self.list_box.clear_widgets()
@@ -439,30 +475,50 @@ class TrackerApp(App):
             return
         if not self.show_done:
             records = [record for record in records if record.status != "Done"]
+        self.list_heading.text = f"Applications  ·  {len(records)}"
         if not records:
-            self.list_box.add_widget(_label("No applications to show", height=46))
+            self.list_box.add_widget(_label("No applications to show", height=46, color=MUTED))
         for record in records:
-            label = f"{record.company}  ·  {record.role}\n{record.status}"
-            row = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(5))
-            select_button = _button(label, lambda record_id=record.id: self.select(record_id))
-            select_button.height = dp(64)
+            label = f"{record.company}  ·  {record.role}"
+            row = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(96), spacing=dp(4))
+            selected = self.selected is not None and self.selected.id == record.id
+            select_button = _button(
+                label,
+                lambda record_id=record.id: self.select(record_id),
+                height=52,
+                kind="selected" if selected else "secondary",
+            )
             select_button.halign = "left"
+            select_button.valign = "middle"
+            select_button.shorten = True
+            select_button.shorten_from = "right"
+            select_button.padding = (dp(10), 0)
+            select_button.bind(
+                size=lambda item, *_: setattr(item, "text_size", (item.width - dp(20), item.height))
+            )
             row.add_widget(select_button)
+            details = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(5))
+            details.add_widget(_label(record.status, height=40, size=12, color=MUTED))
             done_button = _button(
-                "✓", lambda record_id=record.id: self.mark_done(record_id), width=40
+                "Done",
+                lambda record_id=record.id: self.mark_done(record_id),
+                width=56,
+                height=40,
+                kind="success",
             )
-            done_button.height = dp(64)
-            done_button.font_size = "22sp"
-            done_button.color = (0.47, 0.90, 0.60, 1)
+            done_button.font_size = dp(12)
             done_button.disabled = record.status == "Done"
-            row.add_widget(done_button)
+            details.add_widget(done_button)
             delete_button = _button(
-                "×", lambda record_id=record.id: self.confirm_delete(record_id), width=40
+                "Delete",
+                lambda record_id=record.id: self.confirm_delete(record_id),
+                width=56,
+                height=40,
+                kind="danger_outline",
             )
-            delete_button.height = dp(64)
-            delete_button.font_size = "24sp"
-            delete_button.color = (1, 0.55, 0.55, 1)
-            row.add_widget(delete_button)
+            delete_button.font_size = dp(12)
+            details.add_widget(delete_button)
+            row.add_widget(details)
             self.list_box.add_widget(row)
 
     def refresh_files(self) -> None:
@@ -522,7 +578,7 @@ class TrackerApp(App):
         layout = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(8))
         layout.add_widget(chooser)
         buttons = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        popup = Popup(title="Choose a file", content=layout, size_hint=(0.85, 0.85))
+        popup = _dialog(title="Choose a file", content=layout, size_hint=(0.85, 0.85))
         buttons.add_widget(_button("Cancel", popup.dismiss))
 
         def add():
@@ -531,7 +587,7 @@ class TrackerApp(App):
                 if self.add_file(selected):
                     popup.dismiss()
 
-        buttons.add_widget(_button("Add", add))
+        buttons.add_widget(_button("Add", add, kind="primary"))
         layout.add_widget(buttons)
         popup.open()
 
@@ -634,13 +690,14 @@ class TrackerApp(App):
                 _label(
                     f"{item.happened_at:%Y-%m-%d %H:%M}  ·  #{item.application_id}  "
                     f"{item.action}: {item.detail}",
-                    height=52,
+                    height=72,
+                    shorten=False,
                 )
             )
-        scroll = ScrollView()
+        scroll = _scroll_view()
         scroll.add_widget(rows)
         layout.add_widget(scroll)
-        popup = Popup(title="Change history", content=layout, size_hint=(0.82, 0.75))
+        popup = _dialog(title="Change history", content=layout, size_hint=(0.82, 0.75))
         layout.add_widget(_button("Close", popup.dismiss))
         popup.open()
 
@@ -655,7 +712,7 @@ class TrackerApp(App):
             Label(text=f"Delete {record.company} · {record.role}?\nLinked files stay on disk.")
         )
         buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        popup = Popup(
+        popup = _dialog(
             title="Delete application",
             content=layout,
             size_hint=(None, None),
@@ -681,7 +738,7 @@ class TrackerApp(App):
             else:
                 apply_delete()
 
-        buttons.add_widget(_button("Delete", delete))
+        buttons.add_widget(_button("Delete", delete, kind="danger"))
         layout.add_widget(buttons)
         popup.open()
 
@@ -715,4 +772,10 @@ class TrackerApp(App):
 
     def message(self, title: str, body: str) -> None:
         label = Label(text=body, text_size=(dp(480), None), halign="center")
-        Popup(title=title, content=label, size_hint=(None, None), size=(dp(540), dp(220))).open()
+        layout = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        layout.add_widget(label)
+        popup = _dialog(
+            title=title, content=layout, size_hint=(None, None), size=(dp(540), dp(220))
+        )
+        layout.add_widget(_button("Close", popup.dismiss, kind="primary"))
+        popup.open()
